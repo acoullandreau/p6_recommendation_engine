@@ -8,6 +8,7 @@ Purpose of this project
 -----------------------
 
 As part of the UDACITY Data Scientist Nanodegree, I worked on a **recommendation engine** project. The purpose of this project was to implement a few methods to recommend articles to user based on the data coming from the IBM Watson Studio platform:
+
 - rank based approach
 - user-user collaborative filtering
 - content based approach (NLP techniques applied to the description of each article)
