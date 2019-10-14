@@ -63,12 +63,11 @@ class SVDRecommender:
 
     def make_SVD_recommendations(self, user_id, num_recommendations=10):
         preds = np.around(np.dot(np.dot(self.u_matrix, self.s_matrix), self.vt_matrix))
-        users = self.user_item.index
-        user_idx = np.where(users == user_id)[0][0]
         articles_idx = preds.argsort()[-num_recommendations:][::-1]
 
         rec_ids = self.user_item.columns[articles_idx]
-        recommended_articles = Utils.get_movie_names(rec_ids, self.interactions_df)
+        recommended_articles = Utils.get_article_names(rec_ids, self.interactions_df, 'title')
+        recommended_articles = recommended_articles[:num_recommendations]
 
         return recommended_articles
 
@@ -78,33 +77,7 @@ class RankRecommender:
     def __init__(self, interactions_df):
         self.interactions_df = interactions_df
         self.article_ids = self.interactions_df['article_id'].unique()
-        self.top_articles_df = self.get_top_articles_df()
-        self.recommendations_names = self.get_top_articles()
-        self.recommendations_ids = None
-
-    def get_top_articles_df(self):
-        '''
-        INPUT:
-        self.article_ids - (list) list of articles to use as a base for recommendations
-        self.interactions_df - (pandas dataframe) df of all article-user interactions
-
-        OUTPUT:
-        self.top_articles_df - (dataframe) A df of ranked articles per number of interactions
-
-        '''
-
-        articles_dict = {}
-
-        for article in self.article_ids:
-            article = float(article)
-            interact = len(self.interactions_df[self.interactions_df['article_id'] == article])
-            article_title = self.interactions_df[self.interactions_df['article_id'] == article]['title'].values[0]
-            articles_dict[article] = {'num_interactions': interact, 'title': article_title}
-
-        top_articles_df = pd.DataFrame.from_dict(articles_dict, orient='index')
-        top_articles_df = top_articles_df.sort_values(by='num_interactions', ascending=False)
-
-        self.top_articles_df = top_articles_df
+        self.top_articles_df = Utils.get_top_articles_df(self.article_ids, self.interactions_df)
 
     def get_top_articles(self, num_recommendations=10):
         '''
@@ -116,9 +89,10 @@ class RankRecommender:
         self.recommendations_names - (list) A list of the top 'n' article titles
 
         '''
-
         # we select only the num_recommendations top articles from the sorted df
-        self.recommendations_names = self.top_articles_df.head(num_recommendations)['title'].values
+        recommendations_names = self.top_articles_df.head(num_recommendations)['title'].values
+
+        return recommendations_names
 
     def get_top_article_ids(self, num_recommendations=10):
         '''
@@ -134,7 +108,9 @@ class RankRecommender:
         # we select only the num_recommendations top articles from the sorted df
         top_articles = self.top_articles_df.head(num_recommendations).index.values
         top_articles = [str(i) for i in top_articles]
-        self.recommendations_ids = top_articles
+        recommendations_ids = top_articles
+
+        return recommendations_ids
 
 
 class UserUserRecommender:
@@ -147,7 +123,8 @@ class UserUserRecommender:
     def compute_similarity(self):
         # compute similarity of each user to any other user
         dot_prod = self.user_item.dot(self.user_item.transpose())
-        self.similarity_matrix = dot_prod
+
+        return dot_prod
 
     def find_similar_users(self, user_id):
         '''
@@ -198,7 +175,7 @@ class UserUserRecommender:
             article_id = self.user_item.iloc[:, article].name
             article_ids.append(str(article_id))  #to match the expected str type as output
 
-        article_names = Utils.get_article_names(article_ids, self.interactions_df)
+        article_names = Utils.get_article_names(article_ids, self.interactions_df, 'title')
 
         return article_ids, article_names  # return the ids and names
 
@@ -265,7 +242,7 @@ class UserUserRecommender:
 
         for neighbor in neighbors_df.index:
             neighbor_articles_id, neighbor_articles_names = self.get_user_articles(neighbor)
-            sorted_neighbor_article_ids = self.get_top_articles_df(neighbor_articles_id)
+            sorted_neighbor_article_ids = Utils.get_top_articles_df(neighbor_articles_id, self.interactions_df)
             sorted_neighbor_article_ids = sorted_neighbor_article_ids.index.values
             article_not_read = np.setdiff1d(sorted_neighbor_article_ids, user_articles_id, assume_unique=True)
             article_not_read = [str(i) for i in article_not_read]
@@ -275,9 +252,9 @@ class UserUserRecommender:
                 break
 
         if len(recs) >= num_recommendations:
-            recs = recs[:10]
+            recs = recs[:num_recommendations]
 
-        recommended_articles = self.get_article_names(recs)
+        recommended_articles = Utils.get_article_names(recs, self.interactions_df, 'title')
 
         return recommended_articles
 
@@ -294,6 +271,9 @@ class ContentRecommender:
         self.content_similarity_matrix = self.compute_content_similarity_matrix()
 
     def NLP_processing(self, text):
+        # remove NaN from text
+        text = Utils.remove_NaN(text, 0)
+
         # initialize count vectorizer object
         vect = CountVectorizer(lowercase=False, tokenizer=self.tokenize)
         # get counts of each token (word) in text data
@@ -310,7 +290,8 @@ class ContentRecommender:
         tfidf_matrix = self.NLP_processing(self.content_analysis_target)
 
         cosine = cosine_similarity(tfidf_matrix, tfidf_matrix)
-        self.content_similarity_matrix = cosine
+
+        return cosine
 
     def tokenize(self, text):
         """
@@ -348,7 +329,7 @@ class ContentRecommender:
         words = word_tokenize(text)
 
         # we lemmatize  and remove the stop words
-        words = [self.lemmatizer.lemmatize(word) for word in words if word not in self.stopwords.words('english')]
+        words = [self.lemmatizer.lemmatize(word) for word in words if word not in self.stop_words]
 
         return words
 
@@ -388,7 +369,6 @@ class ContentRecommender:
         Description:
         Provides a list of the article_ids and article titles that have been seen by a user
         '''
-
         user_row = np.where(self.user_item.index == user_id)[0][0]
         user_articles = np.where(self.user_item.iloc[user_row] == 1)[0]
         article_ids = []
@@ -397,7 +377,7 @@ class ContentRecommender:
             article_id = self.user_item.iloc[:, article].name
             article_ids.append(str(article_id))  # to match the expected str type as output
 
-        article_names = Utils.get_article_names(article_ids, self.interactions_df)
+        article_names = Utils.get_article_names(article_ids, self.interactions_df, 'title')
 
         return article_ids, article_names  # return the ids and names
 
@@ -416,7 +396,7 @@ class ContentRecommender:
 
         recommended_articles = self.find_similar_articles(_id)
         recommended_articles = recommended_articles[:num_recommendations]
-        recommended_articles = Utils.get_article_names(recommended_articles, self.article_content_df)
+        recommended_articles = Utils.get_article_names(recommended_articles, self.article_content_df, 'doc_full_name')
 
         return recommended_articles
 
@@ -463,7 +443,7 @@ class ContentRecommender:
                 break
 
         recommended_articles = recommended_articles[:num_recommendations]
-        recommended_articles = Utils.get_article_names(recommended_articles, self.article_content_df)
+        recommended_articles = Utils.get_article_names(recommended_articles, self.article_content_df, 'doc_full_name')
 
         return recommended_articles
 
@@ -476,35 +456,34 @@ class RecommendationEngine:
         self.user_item = user_item
         self.rank_recommender = RankRecommender(self.interactions_df)
         self.user_recommender = UserUserRecommender(self.interactions_df, self.user_item)
-        self.content_recommender = ContentRecommender(self.interactions_df, self.user_item)
-        self.SVD_recommender = SVDRecommender(self.interactions_df, self.article_content_df, self.user_item)
+        self.content_recommender = ContentRecommender(self.interactions_df, self.article_content_df, self.user_item)
+        self.SVD_recommender = SVDRecommender(self.interactions_df, self.user_item)
 
     def make_recommendations(self, _id, _id_type, num_recommendations=10):
 
         if _id_type == 'user':
             # check if user is known
             if _id in np.array(self.interactions_df['user_id']):
-                # check if user had interactions with more than 5 articles
+                # check if user had interactions with less than 5 articles
                 user_num_interactions = len(self.interactions_df[(self.interactions_df['user_id'] == _id)]['article_id'].unique())
                 if user_num_interactions < 5:
-                    recommended_articles = SVDRecommender.make_SVD_recommendations(_id, num_recommendations)
+                    recommended_articles = self.SVD_recommender.make_SVD_recommendations(_id, num_recommendations)
                 else:
-                    user_like_num_recs = int(num_recommendations/2)
-                    content_like_num_recs = num_recommendations - user_like_num_recs
+                    num_recs = 3*num_recommendations
                     # we create a recommendation list
-                    user_like_articles = UserUserRecommender.make_user_user_recommendations(_id, num_recommendations=user_like_num_recs)
-                    content_like_articles = ContentRecommender.make_content_user_recommendations(_id, num_recommendations=content_like_num_recs)
-                    recommended_articles = user_like_articles + content_like_articles
+                    user_like_articles = self.user_recommender.make_user_user_recommendations(_id, num_recommendations=num_recs)
+                    content_like_articles = self.content_recommender.make_content_user_recommendations(_id, num_recommendations=num_recs)
+                    recommended_articles = np.unique(np.concatenate([user_like_articles, content_like_articles], axis=0))
 
                     # we sort the articles per number of interactions
-                    top_articles_df = RankRecommender.top_articles_df
-                    top_articles_ranked = top_articles_df[top_articles_df.index.isin(recommended_articles)]
-
+                    top_articles_df = self.rank_recommender.top_articles_df
+                    top_articles_ranked = top_articles_df[top_articles_df['title'].isin(recommended_articles)]['title'].values
                     recommended_articles = [article for _, article in sorted(zip(top_articles_ranked, recommended_articles))]
+                    recommended_articles = recommended_articles[:num_recommendations]
 
             else:
                 # if user is unknown, we switch to ranked based recommendations
-                recommended_articles = RankRecommender.get_top_articles(num_recommendations)
+                recommended_articles = self.rank_recommender.get_top_articles(num_recommendations)
 
         elif _id_type == 'article':
             recommended_articles = self.content_recommender.make_content_article_recommendations(_id, num_recommendations)
